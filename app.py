@@ -2,139 +2,234 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="GoTo Analytics", layout="wide")
+# Configuração da Página
+st.set_page_config(page_title="Dashboard GoTo Analytics", layout="wide")
 
-st.title("📞 Dashboard de Chamadas")
-st.markdown("Visão geral simplificada e limpa.")
+st.title("📞 Análise de Chamadas")
 
-# --- 2. TRATAMENTO DE DADOS (O mesmo que já funcionava) ---
+# --- FUNÇÃO DE FORMATAÇÃO DE TEMPO ---
+def formatar_tempo(ms):
+    if pd.isna(ms) or ms == 0:
+        return "00:00"
+    seconds = int((ms / 1000) % 60)
+    minutes = int((ms / (1000 * 60)) % 60)
+    hours = int((ms / (1000 * 60 * 60)))
+    
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+# --- 1. CARREGAMENTO E TRATAMENTO DE DADOS (Back-end) ---
 @st.cache_data
 def load_data(file):
     df = pd.read_csv(file)
     
-    # Identificar coluna de data
-    col_date = 'Date [America/Sao_Paulo]' if 'Date [America/Sao_Paulo]' in df.columns else 'Date'
-    
-    # Converter datas (com tratamento de erro)
-    df['Data_Hora'] = pd.to_datetime(df[col_date], errors='coerce', utc=True)
+    # 1. Datas
+    if 'Date [America/Sao_Paulo]' in df.columns:
+        date_col = 'Date [America/Sao_Paulo]'
+    else:
+        date_col = 'Date'
+        
+    df['Data_Hora'] = pd.to_datetime(df[date_col], errors='coerce', utc=True)
     df = df.dropna(subset=['Data_Hora'])
     df['Data_Hora'] = df['Data_Hora'].dt.tz_convert('America/Sao_Paulo')
     
-    # Colunas auxiliares
     df['Data'] = df['Data_Hora'].dt.date
-    df['Hora'] = df['Data_Hora'].dt.hour
-    df['Dia_Semana'] = df['Data_Hora'].dt.day_name() # Em inglês para o mapa de calor funcionar bem
     
-    # Tratamento de Duração
+    # 2. Duração (Cálculos internos)
     df['Duration [Milliseconds]'] = pd.to_numeric(df['Duration [Milliseconds]'], errors='coerce').fillna(0)
-    df['Duracao_Minutos'] = df['Duration [Milliseconds]'] / 60000
+    df['Duracao_Minutos'] = df['Duration [Milliseconds]'] / 60000 
     
-    # Limpeza de Nomes (Remove códigos como '067: ')
-    df['Agente'] = df['From'].astype(str).str.replace(r'^\d+:\s*', '', regex=True)
-    df['Agente'] = df['Agente'].replace({'nan': 'Desconhecido', 'Wait in queue': 'Fila de Espera'})
+    # Coluna Visual (para a tabela)
+    df['Duracao_Visual'] = df['Duration [Milliseconds]'].apply(formatar_tempo)
     
+    # 3. Limpeza de Strings
+    df['Agente'] = df['From'].fillna('Desconhecido').astype(str).str.strip()
+    df['Participantes'] = df['Participants'].fillna('').astype(str).str.strip()
+
+    # 4. Traduções Internas
+    df['Call Result'] = df['Call Result'].astype(str).str.strip()
+    df['Direction'] = df['Direction'].astype(str).str.strip()
+
+    map_resultados = {
+        'Missed Call': 'Perdida',
+        'Ended successfully': 'Atendida',
+        'Voicemail': 'Correio de Voz',
+        'Rejected': 'Rejeitada',
+        'Internal': 'Interna',
+        'Busy': 'Ocupado',
+        'Failed': 'Falha',
+        'Hung up (on hold)': 'Desligou na Espera',
+        'Sent to voicemail': 'Enviado p/ Correio de Voz',
+        'Hung up (in queue)': 'Desligou na Fila'
+    }
+    # Variável interna (o usuário não vai ver esse nome feio)
+    df['Status_Calc'] = df['Call Result'].map(map_resultados).fillna(df['Call Result'])
+
+    map_direcao = {
+        'Inbound': 'Recebida',
+        'Outbound': 'Realizada',
+        'Internal': 'Interna'
+    }
+    df['Direcao_Calc'] = df['Direction'].map(map_direcao).fillna(df['Direction'])
+
     return df
 
-# Função para formatar tempo (ex: 2.5 min -> 2m 30s)
-def format_time(mins):
-    if pd.isna(mins): return "0m"
-    h = int(mins // 60)
-    m = int(mins % 60)
-    if h > 0: return f"{h}h {m}m"
-    return f"{m}m"
+# Upload do Arquivo
+uploaded_file = st.file_uploader("Faça upload do CSV do GoTo", type=['csv'])
 
-# --- 3. INTERFACE PRINCIPAL ---
-
-uploaded_file = st.file_uploader("Arraste o CSV aqui", type=['csv'])
-
-if uploaded_file:
+if uploaded_file is not None:
     df = load_data(uploaded_file)
     
-    # --- FILTROS (BARRA LATERAL) ---
-    with st.sidebar:
-        st.header("Filtros")
+    # --- 2. FILTROS (Visual Limpo) ---
+    st.sidebar.header("Filtros")
+    
+    # Data
+    min_date = df['Data'].min()
+    max_date = df['Data'].max()
+    date_range = st.sidebar.date_input("Período", value=[min_date, max_date], format="DD/MM/YYYY")
+    
+    # Direção
+    direcoes = st.sidebar.multiselect(
+        "Direção", 
+        options=df['Direcao_Calc'].unique(),
+        default=df['Direcao_Calc'].unique()
+    )
+    
+    # Resultado
+    resultados = st.sidebar.multiselect(
+        "Status",
+        options=df['Status_Calc'].unique(),
+        default=df['Status_Calc'].unique()
+    )
+    
+    # Agente
+    lista_agentes = sorted(df['Agente'].unique())
+    agentes_selecionados = st.sidebar.multiselect(
+        "Agente",
+        options=lista_agentes,
+        default=[] 
+    )
+
+    # Busca Cliente
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Buscar Cliente")
+    busca_numero = st.sidebar.text_input(
+        "Digite o telefone:",
+        placeholder="Ex: 1199..."
+    )
+
+    # --- LÓGICA DE FILTRAGEM ---
+    if isinstance(date_range, (list, tuple)):
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+        elif len(date_range) == 1:
+            start_date = end_date = date_range[0]
+        else:
+            start_date, end_date = min_date, max_date
+    else:
+        start_date = end_date = date_range
+
+    mask = (
+        (df['Data'] >= start_date) & 
+        (df['Data'] <= end_date) &
+        (df['Direcao_Calc'].isin(direcoes)) &
+        (df['Status_Calc'].isin(resultados))
+    )
+    df_filtered = df[mask]
+    
+    if agentes_selecionados:
+        df_filtered = df_filtered[df_filtered['Agente'].isin(agentes_selecionados)]
         
-        # Filtro de Data
-        min_d, max_d = df['Data'].min(), df['Data'].max()
-        dates = st.date_input("Período", [min_d, max_d])
-        
-        # Outros Filtros
-        agentes = st.multiselect("Agentes", sorted(df['Agente'].unique()))
-        resultados = st.multiselect("Status", df['Call Result'].unique())
-        direcao = st.multiselect("Direção", df['Direction'].unique())
+    if busca_numero:
+        df_filtered = df_filtered[df_filtered['Participantes'].str.contains(busca_numero, case=False, na=False)]
 
-        # Lógica de Filtragem
-        mask = (df['Data'] >= dates[0]) & (df['Data'] <= dates[1]) if isinstance(dates, list) and len(dates) == 2 else (df['Data'] == dates)
-        
-        df_f = df[mask]
-        if agentes: df_f = df_f[df_f['Agente'].isin(agentes)]
-        if resultados: df_f = df_f[df_f['Call Result'].isin(resultados)]
-        if direcao: df_f = df_f[df_f['Direction'].isin(direcao)]
+    # --- 3. DASHBOARD ---
+    
+    st.markdown("### 📊 Visão Geral")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    total = len(df_filtered)
+    duracao_total_min = df_filtered['Duracao_Minutos'].sum()
+    media_total_min = df_filtered['Duracao_Minutos'].mean() if total > 0 else 0
+    
+    termos_perda = ['Perdida', 'Missed', 'Rejeitada', 'Desligou', 'Falha', 'Busy']
+    perdas = len(df_filtered[df_filtered['Status_Calc'].astype(str).str.contains('|'.join(termos_perda), case=False)])
+    taxa_perda = (perdas / total * 100) if total > 0 else 0
 
-    # --- KPIS (CARTÕES NO TOPO) ---
-    # Usando st.container(border=True) para criar o efeito de "Card" nativo
+    c1.metric("Total de Chamadas", total)
+    c2.metric("Tempo Total", f"{duracao_total_min/60:.1f}h")
+    c3.metric("Tempo Médio", f"{media_total_min:.1f} min")
+    c4.metric("Taxa de Perda", f"{taxa_perda:.1f}%", delta_color="inverse")
     
-    total = len(df_f)
-    missed = len(df_f[df_f['Call Result'].str.contains('Missed|Voicemail', case=False, na=False)])
-    missed_rate = (missed / total * 100) if total > 0 else 0
-    tma = format_time(df_f['Duracao_Minutos'].mean())
-    total_time = format_time(df_f['Duracao_Minutos'].sum())
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        with st.container(border=True): # Borda nativa bonita
-            st.metric("Total Chamadas", total)
-    with col2:
-        with st.container(border=True):
-            st.metric("Tempo Total", total_time)
-    with col3:
-        with st.container(border=True):
-            st.metric("Tempo Médio (TMA)", tma)
-    with col4:
-        with st.container(border=True):
-            st.metric("Taxa de Perda", f"{missed_rate:.1f}%", f"{missed} perdidas", delta_color="inverse")
+    st.divider()
 
-    # --- GRÁFICOS ---
+    col_g1, col_g2 = st.columns([2, 1])
     
-    # Linha 1: Evolução Temporal + Pizza
-    c1, c2 = st.columns([2, 1])
+    with col_g1:
+        st.subheader("Volume por Dia")
+        if total > 0:
+            daily = df_filtered.groupby('Data').size().reset_index(name='Quantidade')
+            # labels={} renomeia a legenda automática do gráfico
+            fig = px.line(
+                daily, x='Data', y='Quantidade', markers=True, 
+                template="plotly_dark",
+                labels={'Data': 'Data', 'Quantidade': 'Chamadas'}
+            )
+            fig.update_xaxes(tickformat="%d/%m/%Y")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Sem dados.")
+
+    with col_g2:
+        st.subheader("Status")
+        if total > 0:
+            # labels={} garante que no gráfico apareça 'Status' e não 'Status_Calc'
+            fig_pie = px.pie(
+                df_filtered, 
+                names='Status_Calc', 
+                hole=0.4, 
+                template="plotly_dark",
+                labels={'Status_Calc': 'Status'} 
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+    # --- 4. TABELA DE DADOS (Visual Clean) ---
+    st.subheader("Extrato das Chamadas")
     
-    with c1:
-        with st.container(border=True):
-            st.subheader("Volume Diário")
-            daily = df_f.groupby('Data').size().reset_index(name='Qtd')
-            # Gráfico de Área limpo
-            fig_area = px.area(daily, x='Data', y='Qtd')
-            st.plotly_chart(fig_area, use_container_width=True)
-            
-    with c2:
-        with st.container(border=True):
-            st.subheader("Status")
-            # CORREÇÃO DO ERRO: Usar px.pie com hole=0.5 para fazer o Donut
-            fig_donut = px.pie(df_f, names='Call Result', hole=0.5)
-            fig_donut.update_traces(textinfo='percent+label')
-            fig_donut.update_layout(showlegend=False)
-            st.plotly_chart(fig_donut, use_container_width=True)
-
-    # Linha 2: Ranking Agentes
-    with st.container(border=True):
-        st.subheader("Ranking de Agentes")
-        top_agents = df_f['Agente'].value_counts().head(10).reset_index()
-        top_agents.columns = ['Agente', 'Chamadas']
-        
-        fig_bar = px.bar(top_agents, x='Chamadas', y='Agente', orientation='h', text='Chamadas')
-        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-    # --- TABELA DE DADOS ---
-    with st.expander("Ver dados detalhados"):
-        st.dataframe(
-            df_f[['Data_Hora', 'Direction', 'Agente', 'Call Result', 'Duracao_Minutos']]
-            .sort_values('Data_Hora', ascending=False),
-            use_container_width=True
-        )
+    df_show = df_filtered.copy()
+    
+    # Formatação Visual da Data
+    df_show['Data_Visual'] = df_show['Data_Hora'].dt.strftime('%d/%m/%Y %H:%M')
+    
+    # Formatação Visual do Cliente (Pega só o primeiro número)
+    df_show['Cliente_Visual'] = df_show['Participantes'].str.split(';').str[0]
+    
+    # Seleção e Renomeação Final (O pulo do gato para ficar limpo)
+    cols_order = [
+        'Data_Visual', 
+        'Agente',             
+        'Cliente_Visual',      
+        'Direcao_Calc', 
+        'Status_Calc', 
+        'Duracao_Visual'
+    ]
+    
+    # Dicionário de nomes amigáveis
+    rename_map = {
+        'Data_Visual': 'Data/Hora',
+        'Agente': 'Agente',
+        'Cliente_Visual': 'Cliente / Telefone',
+        'Direcao_Calc': 'Direção',
+        'Status_Calc': 'Status',
+        'Duracao_Visual': 'Duração'
+    }
+    
+    st.dataframe(
+        df_show[cols_order].rename(columns=rename_map),
+        use_container_width=True,
+        hide_index=True
+    )
 
 else:
-    st.info("Por favor, faça upload do arquivo CSV.")
+    st.info("Aguardando upload do arquivo CSV...")

@@ -26,7 +26,7 @@ def load_data(file):
     df['Data'] = df['Data_Hora'].dt.date
     df['Hora'] = df['Data_Hora'].dt.hour
     
-    # --- TRADUÇÃO DOS DIAS (Garantindo que venha em inglês para traduzir certo) ---
+    # --- TRADUÇÃO DOS DIAS ---
     df['Dia_Semana_Raw'] = df['Data_Hora'].dt.day_name()
     map_dias = {
         'Monday': 'Segunda', 'Tuesday': 'Terça', 'Wednesday': 'Quarta',
@@ -41,8 +41,8 @@ def load_data(file):
     # Limpeza de Agente
     df['Agente'] = df['From'].fillna('Desconhecido').astype(str)
 
-    # --- TRADUÇÃO DE RESULTADOS E DIREÇÃO (Blindagem) ---
-    # Primeiro, converte para string e remove espaços extras do começo/fim
+    # --- TRADUÇÃO DE RESULTADOS E DIREÇÃO (ATUALIZADO) ---
+    # Limpa espaços antes de traduzir
     df['Call Result'] = df['Call Result'].astype(str).str.strip()
     df['Direction'] = df['Direction'].astype(str).str.strip()
 
@@ -53,9 +53,14 @@ def load_data(file):
         'Rejected': 'Rejeitada',
         'Internal': 'Interna',
         'Busy': 'Ocupado',
-        'Failed': 'Falha'
+        'Failed': 'Falha',
+        # --- NOVAS TRADUÇÕES ADICIONADAS AQUI ---
+        'Hung up (on hold)': 'Desligou na Espera',
+        'Sent to voicemail': 'Enviado p/ Correio de Voz',
+        'Hung up (in queue)': 'Desligou na Fila'
     }
-    # Se não encontrar no dicionário, mantém o original
+    
+    # Traduz, se não achar mantém o original
     df['Resultado_Traduzido'] = df['Call Result'].map(map_resultados).fillna(df['Call Result'])
 
     map_direcao = {
@@ -71,8 +76,8 @@ def load_data(file):
 uploaded_file = st.file_uploader("Faça upload do CSV do GoTo", type=['csv'])
 
 if uploaded_file is not None:
-    # Limpar cache antigo para garantir que a nova lógica rode
-    # st.cache_data.clear() # Descomente essa linha se continuar dando erro, rode uma vez e comente de novo
+    # Se der erro, descomente a linha abaixo uma vez para limpar o cache antigo
+    # st.cache_data.clear()
     
     df = load_data(uploaded_file)
     
@@ -91,14 +96,14 @@ if uploaded_file is not None:
         format="DD/MM/YYYY" 
     )
     
-    # Filtro de Direção (Usando a coluna traduzida)
+    # Filtro de Direção
     direcoes = st.sidebar.multiselect(
         "Direção da Chamada", 
         options=df['Direcao_Traduzida'].unique(),
         default=df['Direcao_Traduzida'].unique()
     )
     
-    # Filtro de Resultado (Usando a coluna traduzida)
+    # Filtro de Resultado
     resultados = st.sidebar.multiselect(
         "Resultado da Chamada",
         options=df['Resultado_Traduzido'].unique(),
@@ -134,8 +139,10 @@ if uploaded_file is not None:
     total_duration = df_filtered['Duracao_Minutos'].sum()
     avg_duration = df_filtered['Duracao_Minutos'].mean() if total_calls > 0 else 0
     
-    # Taxa de Perda (Procura por 'Perdida' ou 'Missed' caso a tradução tenha falhado por algum motivo extremo)
-    missed_calls = len(df_filtered[df_filtered['Resultado_Traduzido'].str.contains('Perdida|Missed|Rejeitada', case=False)])
+    # KPI de Perda: Considera tudo que não é sucesso
+    # Ajustei para pegar variações de perda
+    termos_perda = ['Perdida', 'Missed', 'Rejeitada', 'Desligou', 'Falha']
+    missed_calls = len(df_filtered[df_filtered['Resultado_Traduzido'].astype(str).str.contains('|'.join(termos_perda), case=False)])
     missed_rate = (missed_calls / total_calls * 100) if total_calls > 0 else 0
 
     col1.metric("Total de Chamadas", f"{total_calls}")
@@ -154,7 +161,7 @@ if uploaded_file is not None:
         st.subheader("Volume Diário")
         calls_per_day = df_filtered.groupby('Data').size().reset_index(name='Contagem')
         fig_timeline = px.line(calls_per_day, x='Data', y='Contagem', markers=True, template="plotly_dark")
-        fig_timeline.update_xaxes(tickformat="%d/%m/%Y") # Formato BR no Gráfico
+        fig_timeline.update_xaxes(tickformat="%d/%m/%Y")
         st.plotly_chart(fig_timeline, use_container_width=True)
         
     with col_g2:
@@ -188,13 +195,9 @@ if uploaded_file is not None:
     # --- 5. TABELA DETALHADA ---
     st.subheader("Dados Detalhados")
     
-    # Criar tabela de exibição limpa
     df_display = df_filtered.copy()
-    
-    # Formatar Data explicitamente para String BR
     df_display['Data_Formatada'] = df_display['Data_Hora'].dt.strftime('%d/%m/%Y %H:%M')
     
-    # Selecionar colunas finais
     colunas_finais = {
         'Data_Formatada': 'Data/Hora',
         'Direcao_Traduzida': 'Direção',
@@ -204,7 +207,6 @@ if uploaded_file is not None:
     }
     
     df_show = df_display[list(colunas_finais.keys())].rename(columns=colunas_finais)
-    
     st.dataframe(df_show, use_container_width=True, hide_index=True)
 
 else:

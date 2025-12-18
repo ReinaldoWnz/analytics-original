@@ -1,213 +1,209 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
-    page_title="GoTo Analytics Dashboard",
+    page_title="GoTo Analytics",
     page_icon="📞",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- FUNÇÕES AUXILIARES DE FORMATAÇÃO ---
-def formatar_duracao_humanizada(minutos_totais):
-    """Converte minutos float (ex: 125.5) para string '2h 05m' ou '05m 30s'"""
-    if pd.isna(minutos_totais):
-        return "0m"
+# --- CSS PERSONALIZADO (A MÁGICA VISUAL) ---
+st.markdown("""
+<style>
+    /* Fundo geral da aplicação (Cinza suave estilo SaaS) */
+    .stApp {
+        background-color: #f0f2f6;
+    }
     
-    segundos_totais = int(minutos_totais * 60)
+    /* Estilo dos Cards (Caixas brancas com sombra) */
+    .css-card {
+        background-color: #ffffff;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        margin-bottom: 20px;
+        border: 1px solid #e0e0e0;
+    }
     
-    horas = segundos_totais // 3600
-    minutos_restantes = (segundos_totais % 3600) // 60
-    segundos = segundos_totais % 60
+    /* Títulos dos Cards */
+    .card-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #555;
+        margin-bottom: 10px;
+    }
     
-    if horas > 0:
-        return f"{horas}h {minutos_restantes}m"
-    else:
-        return f"{minutos_restantes}m {segundos}s"
+    /* Números Grandes (KPIs) */
+    .kpi-value {
+        font-size: 32px;
+        font-weight: 700;
+        color: #1f2937;
+        margin: 0;
+    }
+    
+    /* Legendas dos KPIs */
+    .kpi-label {
+        font-size: 14px;
+        color: #6b7280;
+        margin-top: 4px;
+    }
+    
+    /* Destaque para cores específicas */
+    .text-green { color: #10b981; }
+    .text-red { color: #ef4444; }
+    .text-blue { color: #3b82f6; }
+    
+    /* Remove padding excessivo do topo */
+    .block-container {
+        padding-top: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# --- CARREGAMENTO E LIMPEZA DE DADOS ---
+# --- FUNÇÕES DE CARGA E TRATAMENTO (Mesma lógica robusta) ---
 @st.cache_data
 def load_data(file):
-    # Lê o CSV
     df = pd.read_csv(file)
     
-    # 1. TRATAMENTO DE DATA (Evitar erros de formato)
-    # Tenta usar a coluna com fuso horário local se existir, senão usa a padrão
+    # Datas
     if 'Date [America/Sao_Paulo]' in df.columns:
         date_col = 'Date [America/Sao_Paulo]'
     else:
         date_col = 'Date'
 
-    # Converte para datetime forçando erros a virarem NaT (Not a Time)
-    # utc=True ajuda a interpretar formatos ISO complexos
     df['Data_Hora'] = pd.to_datetime(df[date_col], errors='coerce', utc=True)
-    
-    # Remove linhas que não tenham data válida (ex: rodapés ou linhas vazias)
     df = df.dropna(subset=['Data_Hora'])
-    
-    # Converte para o fuso horário de SP
     df['Data_Hora'] = df['Data_Hora'].dt.tz_convert('America/Sao_Paulo')
     
-    # Cria colunas derivadas para filtros e gráficos
     df['Data'] = df['Data_Hora'].dt.date
     df['Hora'] = df['Data_Hora'].dt.hour
     df['Dia_Semana'] = df['Data_Hora'].dt.day_name()
     
-    # 2. TRATAMENTO DE DURAÇÃO
-    # Garante que é número e preenche vazios com 0
+    # Duração
     df['Duration [Milliseconds]'] = pd.to_numeric(df['Duration [Milliseconds]'], errors='coerce').fillna(0)
-    # Converte para minutos para facilitar cálculos
     df['Duracao_Minutos'] = df['Duration [Milliseconds]'] / 60000
     
-    # 3. LIMPEZA DE NOMES DE AGENTES
-    # Remove prefixos numéricos como '067: ' ou '031: ' da coluna 'From'
+    # Limpeza de Nomes
     df['Agente'] = df['From'].astype(str).str.replace(r'^\d+:\s*', '', regex=True)
     df['Agente'] = df['Agente'].replace({'nan': 'Desconhecido', 'Wait in queue': 'Fila de Espera'})
     
-    # Tradução simples de dias da semana para ordenação no gráfico
-    dias_traducao = {
-        'Monday': 'Segunda', 'Tuesday': 'Terça', 'Wednesday': 'Quarta',
-        'Thursday': 'Quinta', 'Friday': 'Sexta', 'Saturday': 'Sábado', 'Sunday': 'Domingo'
-    }
-    df['Dia_Semana_PT'] = df['Dia_Semana'].map(dias_traducao)
+    # Tradução Dias
+    dias_map = {'Monday': 'Seg', 'Tuesday': 'Ter', 'Wednesday': 'Qua', 'Thursday': 'Qui', 'Friday': 'Sex', 'Saturday': 'Sáb', 'Sunday': 'Dom'}
+    df['Dia_Semana_PT'] = df['Dia_Semana'].map(dias_map)
 
     return df
 
-# --- INTERFACE PRINCIPAL ---
+def format_time(mins):
+    if pd.isna(mins): return "0m"
+    h = int(mins // 60)
+    m = int(mins % 60)
+    if h > 0: return f"{h}h {m}m"
+    return f"{m}m"
 
-st.title("📞 Dashboard GoTo Analytics")
-st.markdown("Visão estratégica de chamadas, performance de agentes e horários de pico.")
+# --- APP PRINCIPAL ---
 
-# UPLOAD
-uploaded_file = st.file_uploader("Arraste seu arquivo CSV (Relatório GoTo) aqui", type=['csv'])
+st.markdown("### 📞 Dashboard de Chamadas")
 
-if uploaded_file is not None:
-    # Carregar dados
-    df = load_data(uploaded_file)
+uploaded_file = st.file_uploader("", type=['csv'], label_visibility="collapsed")
+if not uploaded_file:
+    st.info("👆 Carregue o CSV do GoTo Analytics para ver o dashboard.")
+    st.stop()
+
+df = load_data(uploaded_file)
+
+# --- SIDEBAR (Filtros Limpos) ---
+with st.sidebar:
+    st.header("Filtros")
     
-    # --- BARRA LATERAL (FILTROS) ---
-    st.sidebar.header("🔍 Filtros")
+    # Filtro Data
+    min_d, max_d = df['Data'].min(), df['Data'].max()
+    dates = st.date_input("Período", [min_d, max_d])
     
-    # 1. Filtro de Data
-    min_date = df['Data'].min()
-    max_date = df['Data'].max()
-    date_range = st.sidebar.date_input("Período de Análise", [min_date, max_date])
+    # Filtros Multiplos
+    direction = st.multiselect("Direção", df['Direction'].unique(), default=df['Direction'].unique())
+    results = st.multiselect("Status", df['Call Result'].unique(), default=df['Call Result'].unique())
+    agents = st.multiselect("Agentes", sorted(df['Agente'].unique()))
 
-    # Se o usuário selecionar apenas uma data, o streamlit retorna só um objeto data, não uma lista
-    if isinstance(date_range, list) and len(date_range) == 2:
-        start_date, end_date = date_range
-        mask_date = (df['Data'] >= start_date) & (df['Data'] <= end_date)
+    # Lógica de Filtro
+    if isinstance(dates, list) and len(dates) == 2:
+        mask = (df['Data'] >= dates[0]) & (df['Data'] <= dates[1])
     else:
-        mask_date = (df['Data'] == date_range[0]) if isinstance(date_range, list) else (df['Data'] == date_range)
+        mask = (df['Data'] == dates[0]) if isinstance(dates, list) else (df['Data'] == dates)
+        
+    df_f = df[mask & df['Direction'].isin(direction) & df['Call Result'].isin(results)]
+    if agents: df_f = df_f[df_f['Agente'].isin(agents)]
+
+# --- CÁLCULOS KPI ---
+total = len(df_f)
+dur_total = format_time(df_f['Duracao_Minutos'].sum())
+dur_media = format_time(df_f['Duracao_Minutos'].mean())
+missed = len(df_f[df_f['Call Result'].str.contains('Missed|Voicemail', case=False, na=False)])
+missed_rate = (missed / total * 100) if total > 0 else 0
+
+# --- LAYOUT DE CARDS (HTML PURO PARA BELEZA) ---
+col1, col2, col3, col4 = st.columns(4)
+
+def kpi_card(title, value, subtext="", color_class=""):
+    return f"""
+    <div class="css-card">
+        <div class="card-title">{title}</div>
+        <div class="kpi-value {color_class}">{value}</div>
+        <div class="kpi-label">{subtext}</div>
+    </div>
+    """
+
+with col1:
+    st.markdown(kpi_card("Total Chamadas", total, "Volume no período"), unsafe_allow_html=True)
+with col2:
+    st.markdown(kpi_card("Duração Total", dur_total, "Tempo falado"), unsafe_allow_html=True)
+with col3:
+    st.markdown(kpi_card("TMA", dur_media, "Tempo médio ated."), unsafe_allow_html=True)
+with col4:
+    color = "text-red" if missed_rate > 15 else "text-green"
+    st.markdown(kpi_card("Taxa de Perda", f"{missed_rate:.1f}%", f"{missed} não atendidas", color), unsafe_allow_html=True)
+
+# --- GRÁFICOS (EM CONTAINER BRANCO) ---
+
+# Linha 1: Evolução
+with st.container():
+    st.markdown('<div class="css-card">', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">Fluxo de Chamadas por Dia</div>', unsafe_allow_html=True)
     
-    # 2. Filtro de Direção
-    all_directions = df['Direction'].unique()
-    directions = st.sidebar.multiselect("Direção", all_directions, default=all_directions)
-    
-    # 3. Filtro de Resultado (Ex: Missed, Ended)
-    all_results = df['Call Result'].unique()
-    results = st.sidebar.multiselect("Resultado", all_results, default=all_results)
-    
-    # 4. Filtro de Agente
-    all_agents = sorted(df['Agente'].unique())
-    selected_agents = st.sidebar.multiselect("Agentes", all_agents, default=[])
+    daily = df_f.groupby('Data').size().reset_index(name='Chamadas')
+    fig = px.area(daily, x='Data', y='Chamadas', template='plotly_white')
+    fig.update_traces(line_color='#3b82f6', fillcolor='rgba(59, 130, 246, 0.1)')
+    fig.update_layout(height=300, margin=dict(l=20, r=20, t=10, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # APLICAR FILTROS
-    df_filtered = df[mask_date & df['Direction'].isin(directions) & df['Call Result'].isin(results)]
-    
-    if selected_agents:
-        df_filtered = df_filtered[df_filtered['Agente'].isin(selected_agents)]
+# Linha 2: Duas Colunas
+c1, c2 = st.columns(2)
 
-    if df_filtered.empty:
-        st.warning("Nenhum dado encontrado para os filtros selecionados.")
-    else:
-        # --- BLOCO DE KPIs (ESTILO GOTO) ---
-        st.markdown("### Indicadores Chave")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        # Cálculos
-        total_calls = len(df_filtered)
-        
-        total_duration_mins = df_filtered['Duracao_Minutos'].sum()
-        total_duration_fmt = formatar_duracao_humanizada(total_duration_mins)
-        
-        avg_duration_mins = df_filtered['Duracao_Minutos'].mean()
-        avg_duration_fmt = formatar_duracao_humanizada(avg_duration_mins)
-        
-        # Missed Calls (Lógica: Contém 'Missed' ou 'Voicemail')
-        missed_count = len(df_filtered[df_filtered['Call Result'].str.contains('Missed|Voicemail', case=False, na=False)])
-        missed_rate = (missed_count / total_calls * 100) if total_calls > 0 else 0
-        
-        # Exibição
-        col1.metric("Volume de Chamadas", total_calls)
-        col2.metric("Duração Total", total_duration_fmt)
-        col3.metric("Tempo Médio (TMA)", avg_duration_fmt)
-        col4.metric("Taxa de Perda", f"{missed_rate:.1f}%", f"{missed_count} perdidas", delta_color="inverse")
-        
-        st.divider()
+with c1:
+    st.markdown('<div class="css-card">', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">Top Agentes</div>', unsafe_allow_html=True)
+    top = df_f['Agente'].value_counts().head(8).reset_index()
+    top.columns = ['Agente', 'Qtd']
+    fig = px.bar(top, x='Qtd', y='Agente', orientation='h', text='Qtd', template='plotly_white')
+    fig.update_traces(marker_color='#10b981', textposition='outside')
+    fig.update_layout(height=350, margin=dict(l=0, r=0, t=0, b=0), yaxis={'categoryorder':'total ascending'})
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-        # --- GRÁFICOS ---
-        
-        # LINHA 1
-        c1, c2 = st.columns([2, 1])
-        
-        with c1:
-            st.subheader("Evolução de Chamadas")
-            # Agrupa por dia
-            daily_counts = df_filtered.groupby('Data').size().reset_index(name='Chamadas')
-            fig_line = px.line(daily_counts, x='Data', y='Chamadas', markers=True, template='plotly_white')
-            fig_line.update_layout(xaxis_title=None)
-            st.plotly_chart(fig_line, use_container_width=True)
-            
-        with c2:
-            st.subheader("Status das Chamadas")
-            fig_pie = px.donut(df_filtered, names='Call Result', hole=0.4, template='plotly_white')
-            fig_pie.update_layout(showlegend=False) # Legenda oculta para limpar visual se preferir
-            st.plotly_chart(fig_pie, use_container_width=True)
+with c2:
+    st.markdown('<div class="css-card">', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">Status da Chamada</div>', unsafe_allow_html=True)
+    fig = px.donut(df_f, names='Call Result', hole=0.6, template='plotly_white')
+    fig.update_layout(height=350, margin=dict(l=0, r=0, t=20, b=20), showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-        # LINHA 2
-        c3, c4 = st.columns(2)
-        
-        with c3:
-            st.subheader("Top Agentes (Volume)")
-            # Top 10 Agentes
-            top_agents = df_filtered['Agente'].value_counts().head(10).reset_index()
-            top_agents.columns = ['Agente', 'Volume']
-            fig_bar = px.bar(top_agents, x='Volume', y='Agente', orientation='h', text='Volume', template='plotly_white')
-            fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_title=None, yaxis_title=None)
-            st.plotly_chart(fig_bar, use_container_width=True)
-            
-        with c4:
-            st.subheader("Mapa de Calor (Horário x Dia)")
-            # Heatmap
-            heatmap_data = df_filtered.groupby(['Dia_Semana_PT', 'Hora']).size().reset_index(name='Chamadas')
-            
-            dias_ordem = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
-            
-            fig_heat = px.density_heatmap(
-                heatmap_data, 
-                x='Hora', 
-                y='Dia_Semana_PT', 
-                z='Chamadas', 
-                nbinsx=24,
-                category_orders={"Dia_Semana_PT": dias_ordem},
-                color_continuous_scale='Tealgrn',
-                template='plotly_white'
-            )
-            fig_heat.update_layout(xaxis_title="Hora do Dia", yaxis_title=None)
-            st.plotly_chart(fig_heat, use_container_width=True)
-
-        # --- DADOS BRUTOS (EXPANDER) ---
-        with st.expander("Ver Dados Detalhados"):
-            st.dataframe(
-                df_filtered[['Data_Hora', 'Direction', 'Agente', 'Call Result', 'Duracao_Formatada']]
-                .rename(columns={'Duracao_Formatada': 'Duração'})
-                .sort_values('Data_Hora', ascending=False),
-                use_container_width=True
-            )
-            
-else:
-    # Tela Inicial (Placeholder)
-    st.info("👆 Faça o upload do arquivo CSV na barra lateral ou acima para começar a análise.")
+# Tabela
+st.markdown('<div class="css-card">', unsafe_allow_html=True)
+st.markdown('<div class="card-title">Detalhamento</div>', unsafe_allow_html=True)
+st.dataframe(df_f[['Data_Hora', 'Direction', 'Agente', 'Call Result', 'Duracao_Minutos']].sort_values('Data_Hora', ascending=False), use_container_width=True, hide_index=True)
+st.markdown('</div>', unsafe_allow_html=True)

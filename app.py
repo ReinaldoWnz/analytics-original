@@ -5,9 +5,21 @@ import plotly.express as px
 # Configuração da Página
 st.set_page_config(page_title="Dashboard GoTo Analytics", layout="wide")
 
-st.title("📞 Análise de Chamadas - GoTo Analytics")
+st.title("📞 Análise de Chamadas")
 
-# --- 1. CARREGAMENTO E TRATAMENTO DE DADOS ---
+# --- FUNÇÃO DE FORMATAÇÃO DE TEMPO ---
+def formatar_tempo(ms):
+    if pd.isna(ms) or ms == 0:
+        return "00:00"
+    seconds = int((ms / 1000) % 60)
+    minutes = int((ms / (1000 * 60)) % 60)
+    hours = int((ms / (1000 * 60 * 60)))
+    
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+# --- 1. CARREGAMENTO E TRATAMENTO DE DADOS (Back-end) ---
 @st.cache_data
 def load_data(file):
     df = pd.read_csv(file)
@@ -23,25 +35,19 @@ def load_data(file):
     df['Data_Hora'] = df['Data_Hora'].dt.tz_convert('America/Sao_Paulo')
     
     df['Data'] = df['Data_Hora'].dt.date
-    df['Hora'] = df['Data_Hora'].dt.hour
     
-    # 2. Dias da Semana
-    df['Dia_Semana_Raw'] = df['Data_Hora'].dt.day_name()
-    map_dias = {
-        'Monday': 'Segunda', 'Tuesday': 'Terça', 'Wednesday': 'Quarta',
-        'Thursday': 'Quinta', 'Friday': 'Sexta', 'Saturday': 'Sábado', 'Sunday': 'Domingo'
-    }
-    df['Dia_Semana'] = df['Dia_Semana_Raw'].map(map_dias).fillna(df['Dia_Semana_Raw'])
-
-    # 3. Duração
+    # 2. Duração (Cálculos internos)
     df['Duration [Milliseconds]'] = pd.to_numeric(df['Duration [Milliseconds]'], errors='coerce').fillna(0)
-    df['Duracao_Minutos'] = df['Duration [Milliseconds]'] / 60000
+    df['Duracao_Minutos'] = df['Duration [Milliseconds]'] / 60000 
     
-    # 4. Mapeamento Específico
+    # Coluna Visual (para a tabela)
+    df['Duracao_Visual'] = df['Duration [Milliseconds]'].apply(formatar_tempo)
+    
+    # 3. Limpeza de Strings
     df['Agente'] = df['From'].fillna('Desconhecido').astype(str).str.strip()
     df['Participantes'] = df['Participants'].fillna('').astype(str).str.strip()
 
-    # 5. Traduções
+    # 4. Traduções Internas
     df['Call Result'] = df['Call Result'].astype(str).str.strip()
     df['Direction'] = df['Direction'].astype(str).str.strip()
 
@@ -57,14 +63,15 @@ def load_data(file):
         'Sent to voicemail': 'Enviado p/ Correio de Voz',
         'Hung up (in queue)': 'Desligou na Fila'
     }
-    df['Resultado_Traduzido'] = df['Call Result'].map(map_resultados).fillna(df['Call Result'])
+    # Variável interna (o usuário não vai ver esse nome feio)
+    df['Status_Calc'] = df['Call Result'].map(map_resultados).fillna(df['Call Result'])
 
     map_direcao = {
         'Inbound': 'Recebida',
         'Outbound': 'Realizada',
         'Internal': 'Interna'
     }
-    df['Direcao_Traduzida'] = df['Direction'].map(map_direcao).fillna(df['Direction'])
+    df['Direcao_Calc'] = df['Direction'].map(map_direcao).fillna(df['Direction'])
 
     return df
 
@@ -74,7 +81,7 @@ uploaded_file = st.file_uploader("Faça upload do CSV do GoTo", type=['csv'])
 if uploaded_file is not None:
     df = load_data(uploaded_file)
     
-    # --- 2. FILTROS LATERAIS (SIDEBAR) ---
+    # --- 2. FILTROS (Visual Limpo) ---
     st.sidebar.header("Filtros")
     
     # Data
@@ -85,36 +92,34 @@ if uploaded_file is not None:
     # Direção
     direcoes = st.sidebar.multiselect(
         "Direção", 
-        options=df['Direcao_Traduzida'].unique(),
-        default=df['Direcao_Traduzida'].unique()
+        options=df['Direcao_Calc'].unique(),
+        default=df['Direcao_Calc'].unique()
     )
     
     # Resultado
     resultados = st.sidebar.multiselect(
-        "Status / Resultado",
-        options=df['Resultado_Traduzido'].unique(),
-        default=df['Resultado_Traduzido'].unique()
+        "Status",
+        options=df['Status_Calc'].unique(),
+        default=df['Status_Calc'].unique()
     )
     
-    # Filtro Agente (From)
+    # Agente
     lista_agentes = sorted(df['Agente'].unique())
     agentes_selecionados = st.sidebar.multiselect(
-        "Filtrar por Agente (From)",
+        "Agente",
         options=lista_agentes,
         default=[] 
     )
 
-    # Filtro Cliente (Texto)
+    # Busca Cliente
     st.sidebar.markdown("---")
     st.sidebar.subheader("Buscar Cliente")
     busca_numero = st.sidebar.text_input(
-        "Digite o número ou parte dele:",
-        placeholder="Ex: 119985..."
+        "Digite o telefone:",
+        placeholder="Ex: 1199..."
     )
-    st.sidebar.caption("Busca na coluna 'Participants'")
 
-    # --- APLICAR LÓGICA DE FILTRAGEM ---
-    
+    # --- LÓGICA DE FILTRAGEM ---
     if isinstance(date_range, (list, tuple)):
         if len(date_range) == 2:
             start_date, end_date = date_range
@@ -128,8 +133,8 @@ if uploaded_file is not None:
     mask = (
         (df['Data'] >= start_date) & 
         (df['Data'] <= end_date) &
-        (df['Direcao_Traduzida'].isin(direcoes)) &
-        (df['Resultado_Traduzido'].isin(resultados))
+        (df['Direcao_Calc'].isin(direcoes)) &
+        (df['Status_Calc'].isin(resultados))
     )
     df_filtered = df[mask]
     
@@ -145,63 +150,79 @@ if uploaded_file is not None:
     
     c1, c2, c3, c4 = st.columns(4)
     total = len(df_filtered)
-    duracao_total = df_filtered['Duracao_Minutos'].sum()
-    media_total = df_filtered['Duracao_Minutos'].mean() if total > 0 else 0
+    duracao_total_min = df_filtered['Duracao_Minutos'].sum()
+    media_total_min = df_filtered['Duracao_Minutos'].mean() if total > 0 else 0
     
     termos_perda = ['Perdida', 'Missed', 'Rejeitada', 'Desligou', 'Falha', 'Busy']
-    perdas = len(df_filtered[df_filtered['Resultado_Traduzido'].astype(str).str.contains('|'.join(termos_perda), case=False)])
+    perdas = len(df_filtered[df_filtered['Status_Calc'].astype(str).str.contains('|'.join(termos_perda), case=False)])
     taxa_perda = (perdas / total * 100) if total > 0 else 0
 
-    c1.metric("Chamadas Filtradas", total)
-    c2.metric("Tempo Total", f"{duracao_total/60:.1f}h")
-    c3.metric("Tempo Médio", f"{media_total:.1f} min")
-    c4.metric("Taxa de Insucesso", f"{taxa_perda:.1f}%", delta_color="inverse")
+    c1.metric("Total de Chamadas", total)
+    c2.metric("Tempo Total", f"{duracao_total_min/60:.1f}h")
+    c3.metric("Tempo Médio", f"{media_total_min:.1f} min")
+    c4.metric("Taxa de Perda", f"{taxa_perda:.1f}%", delta_color="inverse")
     
     st.divider()
 
     col_g1, col_g2 = st.columns([2, 1])
     
     with col_g1:
-        st.subheader("Linha do Tempo")
+        st.subheader("Volume por Dia")
         if total > 0:
-            daily = df_filtered.groupby('Data').size().reset_index(name='Qtd')
-            fig = px.line(daily, x='Data', y='Qtd', markers=True, template="plotly_dark")
+            daily = df_filtered.groupby('Data').size().reset_index(name='Quantidade')
+            # labels={} renomeia a legenda automática do gráfico
+            fig = px.line(
+                daily, x='Data', y='Quantidade', markers=True, 
+                template="plotly_dark",
+                labels={'Data': 'Data', 'Quantidade': 'Chamadas'}
+            )
             fig.update_xaxes(tickformat="%d/%m/%Y")
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning("Sem dados para exibir no gráfico.")
+            st.warning("Sem dados.")
 
     with col_g2:
-        st.subheader("Distribuição")
+        st.subheader("Status")
         if total > 0:
-            fig_pie = px.pie(df_filtered, names='Resultado_Traduzido', hole=0.4, template="plotly_dark")
+            # labels={} garante que no gráfico apareça 'Status' e não 'Status_Calc'
+            fig_pie = px.pie(
+                df_filtered, 
+                names='Status_Calc', 
+                hole=0.4, 
+                template="plotly_dark",
+                labels={'Status_Calc': 'Status'} 
+            )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-    # --- 4. TABELA DE DADOS ---
-    st.subheader("Detalhes das Chamadas")
+    # --- 4. TABELA DE DADOS (Visual Clean) ---
+    st.subheader("Extrato das Chamadas")
     
     df_show = df_filtered.copy()
-    df_show['Data Formatada'] = df_show['Data_Hora'].dt.strftime('%d/%m/%Y %H:%M')
     
-    # --- LIMPEZA VISUAL DOS PARTICIPANTES ---
-    # Pega apenas a primeira parte antes do ";"
-    df_show['Participantes_Limpo'] = df_show['Participantes'].str.split(';').str[0]
+    # Formatação Visual da Data
+    df_show['Data_Visual'] = df_show['Data_Hora'].dt.strftime('%d/%m/%Y %H:%M')
     
+    # Formatação Visual do Cliente (Pega só o primeiro número)
+    df_show['Cliente_Visual'] = df_show['Participantes'].str.split(';').str[0]
+    
+    # Seleção e Renomeação Final (O pulo do gato para ficar limpo)
     cols_order = [
-        'Data Formatada', 
+        'Data_Visual', 
         'Agente',             
-        'Participantes_Limpo', # Usando a coluna limpa     
-        'Direcao_Traduzida', 
-        'Resultado_Traduzido', 
-        'Duracao_Minutos'
+        'Cliente_Visual',      
+        'Direcao_Calc', 
+        'Status_Calc', 
+        'Duracao_Visual'
     ]
     
+    # Dicionário de nomes amigáveis
     rename_map = {
-        'Agente': 'Agente (From)',
-        'Participantes_Limpo': 'Cliente / Número',
-        'Direcao_Traduzida': 'Direção',
-        'Resultado_Traduzido': 'Status',
-        'Duracao_Minutos': 'Duração (min)'
+        'Data_Visual': 'Data/Hora',
+        'Agente': 'Agente',
+        'Cliente_Visual': 'Cliente / Telefone',
+        'Direcao_Calc': 'Direção',
+        'Status_Calc': 'Status',
+        'Duracao_Visual': 'Duração'
     }
     
     st.dataframe(
@@ -211,4 +232,4 @@ if uploaded_file is not None:
     )
 
 else:
-    st.info("Aguardando upload...")
+    st.info("Aguardando upload do arquivo CSV...")

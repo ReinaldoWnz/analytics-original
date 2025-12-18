@@ -113,19 +113,16 @@ if uploaded_file is not None:
     )
     st.sidebar.caption("Busca na coluna 'Participants'")
 
-    # --- APLICAR LÓGICA DE FILTRAGEM (CORRIGIDA) ---
+    # --- APLICAR LÓGICA DE FILTRAGEM ---
     
-    # Correção do Erro: Garante que tratamos Tupla ou Lista da mesma forma
     if isinstance(date_range, (list, tuple)):
         if len(date_range) == 2:
             start_date, end_date = date_range
         elif len(date_range) == 1:
             start_date = end_date = date_range[0]
         else:
-            # Caso raríssimo de lista vazia, pega o padrão
             start_date, end_date = min_date, max_date
     else:
-        # Se por algum motivo for um único objeto data
         start_date = end_date = date_range
 
     mask = (
@@ -136,7 +133,6 @@ if uploaded_file is not None:
     )
     df_filtered = df[mask]
     
-    # Filtros adicionais
     if agentes_selecionados:
         df_filtered = df_filtered[df_filtered['Agente'].isin(agentes_selecionados)]
         
@@ -147,7 +143,6 @@ if uploaded_file is not None:
     
     st.markdown("### 📊 Visão Geral")
     
-    # Métricas
     c1, c2, c3, c4 = st.columns(4)
     total = len(df_filtered)
     duracao_total = df_filtered['Duracao_Minutos'].sum()
@@ -164,7 +159,6 @@ if uploaded_file is not None:
     
     st.divider()
 
-    # Gráficos
     col_g1, col_g2 = st.columns([2, 1])
     
     with col_g1:
@@ -180,7 +174,8 @@ if uploaded_file is not None:
     with col_g2:
         st.subheader("Distribuição")
         if total > 0:
-            fig_pie = px.donut(df_filtered, names='Resultado_Traduzido', hole=0.4, template="plotly_dark")
+            # CORREÇÃO AQUI: px.pie em vez de px.donut
+            fig_pie = px.pie(df_filtered, names='Resultado_Traduzido', hole=0.4, template="plotly_dark")
             st.plotly_chart(fig_pie, use_container_width=True)
 
     # --- 4. TABELA DE DADOS ---

@@ -1,102 +1,42 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(
-    page_title="GoTo Analytics",
-    page_icon="📞",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- 1. CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="GoTo Analytics", layout="wide")
 
-# --- CSS PERSONALIZADO (A MÁGICA VISUAL) ---
-st.markdown("""
-<style>
-    /* Fundo geral da aplicação (Cinza suave estilo SaaS) */
-    .stApp {
-        background-color: #f0f2f6;
-    }
-    
-    /* Estilo dos Cards (Caixas brancas com sombra) */
-    .css-card {
-        background-color: #ffffff;
-        border-radius: 12px;
-        padding: 20px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-        margin-bottom: 20px;
-        border: 1px solid #e0e0e0;
-    }
-    
-    /* Títulos dos Cards */
-    .card-title {
-        font-size: 16px;
-        font-weight: 600;
-        color: #555;
-        margin-bottom: 10px;
-    }
-    
-    /* Números Grandes (KPIs) */
-    .kpi-value {
-        font-size: 32px;
-        font-weight: 700;
-        color: #1f2937;
-        margin: 0;
-    }
-    
-    /* Legendas dos KPIs */
-    .kpi-label {
-        font-size: 14px;
-        color: #6b7280;
-        margin-top: 4px;
-    }
-    
-    /* Destaque para cores específicas */
-    .text-green { color: #10b981; }
-    .text-red { color: #ef4444; }
-    .text-blue { color: #3b82f6; }
-    
-    /* Remove padding excessivo do topo */
-    .block-container {
-        padding-top: 2rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.title("📞 Dashboard de Chamadas")
+st.markdown("Visão geral simplificada e limpa.")
 
-# --- FUNÇÕES DE CARGA E TRATAMENTO (Mesma lógica robusta) ---
+# --- 2. TRATAMENTO DE DADOS (O mesmo que já funcionava) ---
 @st.cache_data
 def load_data(file):
     df = pd.read_csv(file)
     
-    # Datas
-    if 'Date [America/Sao_Paulo]' in df.columns:
-        date_col = 'Date [America/Sao_Paulo]'
-    else:
-        date_col = 'Date'
-
-    df['Data_Hora'] = pd.to_datetime(df[date_col], errors='coerce', utc=True)
+    # Identificar coluna de data
+    col_date = 'Date [America/Sao_Paulo]' if 'Date [America/Sao_Paulo]' in df.columns else 'Date'
+    
+    # Converter datas (com tratamento de erro)
+    df['Data_Hora'] = pd.to_datetime(df[col_date], errors='coerce', utc=True)
     df = df.dropna(subset=['Data_Hora'])
     df['Data_Hora'] = df['Data_Hora'].dt.tz_convert('America/Sao_Paulo')
     
+    # Colunas auxiliares
     df['Data'] = df['Data_Hora'].dt.date
     df['Hora'] = df['Data_Hora'].dt.hour
-    df['Dia_Semana'] = df['Data_Hora'].dt.day_name()
+    df['Dia_Semana'] = df['Data_Hora'].dt.day_name() # Em inglês para o mapa de calor funcionar bem
     
-    # Duração
+    # Tratamento de Duração
     df['Duration [Milliseconds]'] = pd.to_numeric(df['Duration [Milliseconds]'], errors='coerce').fillna(0)
     df['Duracao_Minutos'] = df['Duration [Milliseconds]'] / 60000
     
-    # Limpeza de Nomes
+    # Limpeza de Nomes (Remove códigos como '067: ')
     df['Agente'] = df['From'].astype(str).str.replace(r'^\d+:\s*', '', regex=True)
     df['Agente'] = df['Agente'].replace({'nan': 'Desconhecido', 'Wait in queue': 'Fila de Espera'})
     
-    # Tradução Dias
-    dias_map = {'Monday': 'Seg', 'Tuesday': 'Ter', 'Wednesday': 'Qua', 'Thursday': 'Qui', 'Friday': 'Sex', 'Saturday': 'Sáb', 'Sunday': 'Dom'}
-    df['Dia_Semana_PT'] = df['Dia_Semana'].map(dias_map)
-
     return df
 
+# Função para formatar tempo (ex: 2.5 min -> 2m 30s)
 def format_time(mins):
     if pd.isna(mins): return "0m"
     h = int(mins // 60)
@@ -104,106 +44,97 @@ def format_time(mins):
     if h > 0: return f"{h}h {m}m"
     return f"{m}m"
 
-# --- APP PRINCIPAL ---
+# --- 3. INTERFACE PRINCIPAL ---
 
-st.markdown("### 📞 Dashboard de Chamadas")
+uploaded_file = st.file_uploader("Arraste o CSV aqui", type=['csv'])
 
-uploaded_file = st.file_uploader("", type=['csv'], label_visibility="collapsed")
-if not uploaded_file:
-    st.info("👆 Carregue o CSV do GoTo Analytics para ver o dashboard.")
-    st.stop()
-
-df = load_data(uploaded_file)
-
-# --- SIDEBAR (Filtros Limpos) ---
-with st.sidebar:
-    st.header("Filtros")
+if uploaded_file:
+    df = load_data(uploaded_file)
     
-    # Filtro Data
-    min_d, max_d = df['Data'].min(), df['Data'].max()
-    dates = st.date_input("Período", [min_d, max_d])
-    
-    # Filtros Multiplos
-    direction = st.multiselect("Direção", df['Direction'].unique(), default=df['Direction'].unique())
-    results = st.multiselect("Status", df['Call Result'].unique(), default=df['Call Result'].unique())
-    agents = st.multiselect("Agentes", sorted(df['Agente'].unique()))
-
-    # Lógica de Filtro
-    if isinstance(dates, list) and len(dates) == 2:
-        mask = (df['Data'] >= dates[0]) & (df['Data'] <= dates[1])
-    else:
-        mask = (df['Data'] == dates[0]) if isinstance(dates, list) else (df['Data'] == dates)
+    # --- FILTROS (BARRA LATERAL) ---
+    with st.sidebar:
+        st.header("Filtros")
         
-    df_f = df[mask & df['Direction'].isin(direction) & df['Call Result'].isin(results)]
-    if agents: df_f = df_f[df_f['Agente'].isin(agents)]
+        # Filtro de Data
+        min_d, max_d = df['Data'].min(), df['Data'].max()
+        dates = st.date_input("Período", [min_d, max_d])
+        
+        # Outros Filtros
+        agentes = st.multiselect("Agentes", sorted(df['Agente'].unique()))
+        resultados = st.multiselect("Status", df['Call Result'].unique())
+        direcao = st.multiselect("Direção", df['Direction'].unique())
 
-# --- CÁLCULOS KPI ---
-total = len(df_f)
-dur_total = format_time(df_f['Duracao_Minutos'].sum())
-dur_media = format_time(df_f['Duracao_Minutos'].mean())
-missed = len(df_f[df_f['Call Result'].str.contains('Missed|Voicemail', case=False, na=False)])
-missed_rate = (missed / total * 100) if total > 0 else 0
+        # Lógica de Filtragem
+        mask = (df['Data'] >= dates[0]) & (df['Data'] <= dates[1]) if isinstance(dates, list) and len(dates) == 2 else (df['Data'] == dates)
+        
+        df_f = df[mask]
+        if agentes: df_f = df_f[df_f['Agente'].isin(agentes)]
+        if resultados: df_f = df_f[df_f['Call Result'].isin(resultados)]
+        if direcao: df_f = df_f[df_f['Direction'].isin(direcao)]
 
-# --- LAYOUT DE CARDS (HTML PURO PARA BELEZA) ---
-col1, col2, col3, col4 = st.columns(4)
-
-def kpi_card(title, value, subtext="", color_class=""):
-    return f"""
-    <div class="css-card">
-        <div class="card-title">{title}</div>
-        <div class="kpi-value {color_class}">{value}</div>
-        <div class="kpi-label">{subtext}</div>
-    </div>
-    """
-
-with col1:
-    st.markdown(kpi_card("Total Chamadas", total, "Volume no período"), unsafe_allow_html=True)
-with col2:
-    st.markdown(kpi_card("Duração Total", dur_total, "Tempo falado"), unsafe_allow_html=True)
-with col3:
-    st.markdown(kpi_card("TMA", dur_media, "Tempo médio ated."), unsafe_allow_html=True)
-with col4:
-    color = "text-red" if missed_rate > 15 else "text-green"
-    st.markdown(kpi_card("Taxa de Perda", f"{missed_rate:.1f}%", f"{missed} não atendidas", color), unsafe_allow_html=True)
-
-# --- GRÁFICOS (EM CONTAINER BRANCO) ---
-
-# Linha 1: Evolução
-with st.container():
-    st.markdown('<div class="css-card">', unsafe_allow_html=True)
-    st.markdown('<div class="card-title">Fluxo de Chamadas por Dia</div>', unsafe_allow_html=True)
+    # --- KPIS (CARTÕES NO TOPO) ---
+    # Usando st.container(border=True) para criar o efeito de "Card" nativo
     
-    daily = df_f.groupby('Data').size().reset_index(name='Chamadas')
-    fig = px.area(daily, x='Data', y='Chamadas', template='plotly_white')
-    fig.update_traces(line_color='#3b82f6', fillcolor='rgba(59, 130, 246, 0.1)')
-    fig.update_layout(height=300, margin=dict(l=20, r=20, t=10, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    total = len(df_f)
+    missed = len(df_f[df_f['Call Result'].str.contains('Missed|Voicemail', case=False, na=False)])
+    missed_rate = (missed / total * 100) if total > 0 else 0
+    tma = format_time(df_f['Duracao_Minutos'].mean())
+    total_time = format_time(df_f['Duracao_Minutos'].sum())
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        with st.container(border=True): # Borda nativa bonita
+            st.metric("Total Chamadas", total)
+    with col2:
+        with st.container(border=True):
+            st.metric("Tempo Total", total_time)
+    with col3:
+        with st.container(border=True):
+            st.metric("Tempo Médio (TMA)", tma)
+    with col4:
+        with st.container(border=True):
+            st.metric("Taxa de Perda", f"{missed_rate:.1f}%", f"{missed} perdidas", delta_color="inverse")
 
-# Linha 2: Duas Colunas
-c1, c2 = st.columns(2)
+    # --- GRÁFICOS ---
+    
+    # Linha 1: Evolução Temporal + Pizza
+    c1, c2 = st.columns([2, 1])
+    
+    with c1:
+        with st.container(border=True):
+            st.subheader("Volume Diário")
+            daily = df_f.groupby('Data').size().reset_index(name='Qtd')
+            # Gráfico de Área limpo
+            fig_area = px.area(daily, x='Data', y='Qtd')
+            st.plotly_chart(fig_area, use_container_width=True)
+            
+    with c2:
+        with st.container(border=True):
+            st.subheader("Status")
+            # CORREÇÃO DO ERRO: Usar px.pie com hole=0.5 para fazer o Donut
+            fig_donut = px.pie(df_f, names='Call Result', hole=0.5)
+            fig_donut.update_traces(textinfo='percent+label')
+            fig_donut.update_layout(showlegend=False)
+            st.plotly_chart(fig_donut, use_container_width=True)
 
-with c1:
-    st.markdown('<div class="css-card">', unsafe_allow_html=True)
-    st.markdown('<div class="card-title">Top Agentes</div>', unsafe_allow_html=True)
-    top = df_f['Agente'].value_counts().head(8).reset_index()
-    top.columns = ['Agente', 'Qtd']
-    fig = px.bar(top, x='Qtd', y='Agente', orientation='h', text='Qtd', template='plotly_white')
-    fig.update_traces(marker_color='#10b981', textposition='outside')
-    fig.update_layout(height=350, margin=dict(l=0, r=0, t=0, b=0), yaxis={'categoryorder':'total ascending'})
-    st.plotly_chart(fig, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    # Linha 2: Ranking Agentes
+    with st.container(border=True):
+        st.subheader("Ranking de Agentes")
+        top_agents = df_f['Agente'].value_counts().head(10).reset_index()
+        top_agents.columns = ['Agente', 'Chamadas']
+        
+        fig_bar = px.bar(top_agents, x='Chamadas', y='Agente', orientation='h', text='Chamadas')
+        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-with c2:
-    st.markdown('<div class="css-card">', unsafe_allow_html=True)
-    st.markdown('<div class="card-title">Status da Chamada</div>', unsafe_allow_html=True)
-    fig = px.donut(df_f, names='Call Result', hole=0.6, template='plotly_white')
-    fig.update_layout(height=350, margin=dict(l=0, r=0, t=20, b=20), showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
-    st.plotly_chart(fig, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    # --- TABELA DE DADOS ---
+    with st.expander("Ver dados detalhados"):
+        st.dataframe(
+            df_f[['Data_Hora', 'Direction', 'Agente', 'Call Result', 'Duracao_Minutos']]
+            .sort_values('Data_Hora', ascending=False),
+            use_container_width=True
+        )
 
-# Tabela
-st.markdown('<div class="css-card">', unsafe_allow_html=True)
-st.markdown('<div class="card-title">Detalhamento</div>', unsafe_allow_html=True)
-st.dataframe(df_f[['Data_Hora', 'Direction', 'Agente', 'Call Result', 'Duracao_Minutos']].sort_values('Data_Hora', ascending=False), use_container_width=True, hide_index=True)
-st.markdown('</div>', unsafe_allow_html=True)
+else:
+    st.info("Por favor, faça upload do arquivo CSV.")

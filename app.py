@@ -13,23 +13,35 @@ st.title("📞 Análise de Chamadas - GoTo Analytics")
 def load_data(file):
     df = pd.read_csv(file)
     
-    # Converter colunas de data (usando a coluna com fuso horário local se disponível)
-    # O CSV tem "Date [America/Sao_Paulo]", vamos usar essa preferencialmente
-    date_col = 'Date [America/Sao_Paulo]' if 'Date [America/Sao_Paulo]' in df.columns else 'Date'
-    df['Data_Hora'] = pd.to_datetime(df[date_col])
+    # 1. Identificar a coluna de data correta
+    # Verifica se existe a coluna com fuso horário explícito
+    if 'Date [America/Sao_Paulo]' in df.columns:
+        date_col = 'Date [America/Sao_Paulo]'
+    else:
+        date_col = 'Date'
+        
+    # 2. Conversão Robusta de Data
+    # errors='coerce' transforma valores inválidos em NaT (Not a Time) para não travar o app
+    # utc=True ajuda o pandas a entender formatos ISO complexos
+    df['Data_Hora'] = pd.to_datetime(df[date_col], errors='coerce', utc=True)
     
-    # Criar colunas auxiliares
+    # Remove linhas onde a data não pôde ser convertida (ex: rodapés ou linhas vazias)
+    df = df.dropna(subset=['Data_Hora'])
+    
+    # Converte para o fuso horário de SP (para garantir que os gráficos mostrem a hora local)
+    df['Data_Hora'] = df['Data_Hora'].dt.tz_convert('America/Sao_Paulo')
+    
+    # 3. Criar colunas auxiliares
     df['Data'] = df['Data_Hora'].dt.date
     df['Hora'] = df['Data_Hora'].dt.hour
     df['Dia_Semana'] = df['Data_Hora'].dt.day_name()
     
-    # Converter Duração de Milissegundos para Minutos
+    # 4. Tratar Duração (Converter para numérico forçado, pois as vezes vem como string vazia)
+    df['Duration [Milliseconds]'] = pd.to_numeric(df['Duration [Milliseconds]'], errors='coerce').fillna(0)
     df['Duracao_Minutos'] = df['Duration [Milliseconds]'] / 60000
     
-    # Limpeza da coluna 'Participants' ou 'From' para pegar o nome do Agente
-    # Assumindo que queremos analisar quem originou ou atendeu. 
-    # Ajuste essa lógica conforme sua necessidade específica de "Quem é o agente"
-    df['Agente'] = df['From'].fillna('Desconhecido') 
+    # 5. Limpeza de Agente
+    df['Agente'] = df['From'].fillna('Desconhecido').astype(str)
     
     return df
 

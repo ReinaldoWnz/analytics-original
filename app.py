@@ -37,14 +37,11 @@ def load_data(file):
     df['Duration [Milliseconds]'] = pd.to_numeric(df['Duration [Milliseconds]'], errors='coerce').fillna(0)
     df['Duracao_Minutos'] = df['Duration [Milliseconds]'] / 60000
     
-    # 4. Mapeamento Específico Solicitado
-    # Agente = From
+    # 4. Mapeamento Específico
     df['Agente'] = df['From'].fillna('Desconhecido').astype(str).str.strip()
-    
-    # Participantes (para busca de número)
     df['Participantes'] = df['Participants'].fillna('').astype(str).str.strip()
 
-    # 5. Traduções (Status e Direção)
+    # 5. Traduções
     df['Call Result'] = df['Call Result'].astype(str).str.strip()
     df['Direction'] = df['Direction'].astype(str).str.strip()
 
@@ -99,18 +96,15 @@ if uploaded_file is not None:
         default=df['Resultado_Traduzido'].unique()
     )
     
-    # --- NOVOS FILTROS PEDIDOS ---
-    
-    # Filtro 1: Agente (Baseado no 'From')
-    # Dica: Ordenamos a lista para ficar fácil de achar
+    # Filtro Agente (From)
     lista_agentes = sorted(df['Agente'].unique())
     agentes_selecionados = st.sidebar.multiselect(
         "Filtrar por Agente (From)",
         options=lista_agentes,
-        default=[] # Vazio = Todos
+        default=[] 
     )
 
-    # Filtro 2: Participante/Cliente (Busca por Texto)
+    # Filtro Cliente (Texto)
     st.sidebar.markdown("---")
     st.sidebar.subheader("Buscar Cliente")
     busca_numero = st.sidebar.text_input(
@@ -119,14 +113,19 @@ if uploaded_file is not None:
     )
     st.sidebar.caption("Busca na coluna 'Participants'")
 
-    # --- APLICAR LÓGICA DE FILTRAGEM ---
+    # --- APLICAR LÓGICA DE FILTRAGEM (CORRIGIDA) ---
     
-    # Tratamento de Data (evitar erro de dia único)
-    if isinstance(date_range, list) and len(date_range) == 2:
-        start_date, end_date = date_range
-    elif isinstance(date_range, list) and len(date_range) == 1:
-        start_date = end_date = date_range[0]
+    # Correção do Erro: Garante que tratamos Tupla ou Lista da mesma forma
+    if isinstance(date_range, (list, tuple)):
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+        elif len(date_range) == 1:
+            start_date = end_date = date_range[0]
+        else:
+            # Caso raríssimo de lista vazia, pega o padrão
+            start_date, end_date = min_date, max_date
     else:
+        # Se por algum motivo for um único objeto data
         start_date = end_date = date_range
 
     mask = (
@@ -137,13 +136,11 @@ if uploaded_file is not None:
     )
     df_filtered = df[mask]
     
-    # Filtro Específico de Agente
+    # Filtros adicionais
     if agentes_selecionados:
         df_filtered = df_filtered[df_filtered['Agente'].isin(agentes_selecionados)]
         
-    # Filtro de Busca de Número (Participants)
     if busca_numero:
-        # Filtra se o texto digitado estiver contido na coluna Participantes
         df_filtered = df_filtered[df_filtered['Participantes'].str.contains(busca_numero, case=False, na=False)]
 
     # --- 3. DASHBOARD ---
@@ -156,7 +153,6 @@ if uploaded_file is not None:
     duracao_total = df_filtered['Duracao_Minutos'].sum()
     media_total = df_filtered['Duracao_Minutos'].mean() if total > 0 else 0
     
-    # Taxa de Perda Inteligente
     termos_perda = ['Perdida', 'Missed', 'Rejeitada', 'Desligou', 'Falha', 'Busy']
     perdas = len(df_filtered[df_filtered['Resultado_Traduzido'].astype(str).str.contains('|'.join(termos_perda), case=False)])
     taxa_perda = (perdas / total * 100) if total > 0 else 0
@@ -190,20 +186,18 @@ if uploaded_file is not None:
     # --- 4. TABELA DE DADOS ---
     st.subheader("Detalhes das Chamadas")
     
-    # Preparar colunas para exibir
     df_show = df_filtered.copy()
     df_show['Data Formatada'] = df_show['Data_Hora'].dt.strftime('%d/%m/%Y %H:%M')
     
     cols_order = [
         'Data Formatada', 
-        'Agente',             # Coluna FROM
-        'Participantes',      # Coluna PARTICIPANTS (O número do cliente está aqui)
+        'Agente',             
+        'Participantes',      
         'Direcao_Traduzida', 
         'Resultado_Traduzido', 
         'Duracao_Minutos'
     ]
     
-    # Renomear para ficar bonito na tela
     rename_map = {
         'Agente': 'Agente (From)',
         'Participantes': 'Detalhes / Número (Participants)',

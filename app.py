@@ -174,7 +174,6 @@ if uploaded_file is not None:
     with col_g2:
         st.subheader("Distribuição")
         if total > 0:
-            # CORREÇÃO AQUI: px.pie em vez de px.donut
             fig_pie = px.pie(df_filtered, names='Resultado_Traduzido', hole=0.4, template="plotly_dark")
             st.plotly_chart(fig_pie, use_container_width=True)
 
@@ -184,10 +183,14 @@ if uploaded_file is not None:
     df_show = df_filtered.copy()
     df_show['Data Formatada'] = df_show['Data_Hora'].dt.strftime('%d/%m/%Y %H:%M')
     
+    # --- LIMPEZA VISUAL DOS PARTICIPANTES ---
+    # Pega apenas a primeira parte antes do ";"
+    df_show['Participantes_Limpo'] = df_show['Participantes'].str.split(';').str[0]
+    
     cols_order = [
         'Data Formatada', 
         'Agente',             
-        'Participantes',      
+        'Participantes_Limpo', # Usando a coluna limpa     
         'Direcao_Traduzida', 
         'Resultado_Traduzido', 
         'Duracao_Minutos'
@@ -195,7 +198,7 @@ if uploaded_file is not None:
     
     rename_map = {
         'Agente': 'Agente (From)',
-        'Participantes': 'Detalhes / Número (Participants)',
+        'Participantes_Limpo': 'Cliente / Número',
         'Direcao_Traduzida': 'Direção',
         'Resultado_Traduzido': 'Status',
         'Duracao_Minutos': 'Duração (min)'
